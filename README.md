@@ -51,32 +51,6 @@ pip install -r requirements.txt
 
 ## 🎮 Quick Start
 
-```python
-from market_making_simulator import OrderBook, MarketMaker, PnLTracker, MarketSimulator
-
-# Initialize components
-order_book = OrderBook(
-    initial_mid=100.0,
-    spread=0.10,
-    depth_per_level=100.0
-)
-
-market_maker = MarketMaker(
-    quote_spread=0.05,
-    quote_size=10.0,
-    max_inventory=100.0
-)
-
-pnl_tracker = PnLTracker()
-
-# Create and run simulator
-simulator = MarketSimulator(order_book, market_maker, pnl_tracker, random_seed=42)
-simulator.run(num_steps=100, volatility=0.02, arrival_rate=0.5, verbose=True)
-
-# Print detailed results
-simulator.print_summary()
-```
-
 Run the example script:
 ```bash
 python example.py
@@ -199,15 +173,6 @@ This is a strong signal for quantitative trading, prop trading, and cryptocurren
 ## 📝 License
 
 See [LICENSE](LICENSE) for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! This simulator can be extended with:
-- More sophisticated pricing models
-- Alternative market-making strategies
-- Visualization tools
-- Additional market microstructure features
-- Multi-asset simulation
 
 ## 📖 References
 
