@@ -178,6 +178,5 @@ See [LICENSE](LICENSE) for details.
 
 This simulator demonstrates concepts from:
 - Market microstructure theory
-- Optimal market-making (Avellaneda-Stoikov framework)
 - Inventory risk management
 - Adverse selection in financial markets
