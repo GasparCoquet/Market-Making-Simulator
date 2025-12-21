@@ -5,7 +5,9 @@ Example usage of the Market-Making Simulator.
 Demonstrates how to set up and run a market-making simulation with PnL analysis.
 """
 
-from market_making_simulator import OrderBook, MarketMaker, PnLTracker, MarketSimulator
+from market_making_simulator import (
+    OrderBook, MarketMaker, PnLTracker, MarketSimulator, SimulationPlotter
+)
 
 
 def main():
@@ -62,6 +64,29 @@ def main():
     # Print detailed summary
     simulator.print_summary()
     
+    # Create visualizations
+    print("\nGenerating plots...")
+    plotter = SimulationPlotter(figsize=(14, 10))
+    
+    # Plot 1: Main simulation results (4-panel)
+    plotter.plot_simulation(simulator.history, 
+                           title="Market-Making Simulation: Price, Inventory & PnL")
+    
+    # Plot 2: PnL decomposition
+    decomp = pnl_tracker.get_pnl_decomposition()
+    plotter.plot_pnl_decomposition(
+        spread_capture=decomp['spread_capture'],
+        inventory_pnl=decomp['inventory_pnl'],
+        adverse_selection=decomp['adverse_selection'],
+        title="PnL Attribution Breakdown"
+    )
+    
+    # Plot 3: Price with trade markers
+    plotter.plot_price_with_trades(simulator.history,
+                                   title="Price Movement with Buy/Sell Trades")
+    
+    plotter.show()
+    
     # Show some example quotes at different inventory levels
     print("\nExample Quotes at Different Inventory Levels:")
     print("-" * 60)
@@ -79,3 +104,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

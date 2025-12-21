@@ -56,6 +56,26 @@ Run the example script:
 python example.py
 ```
 
+This will run a 100-step simulation and generate three interactive plots:
+- **Multi-panel overview**: Price, inventory, cumulative PnL, and summary statistics
+- **PnL decomposition**: Breakdown of spread capture, inventory risk, and adverse selection
+- **Price with trades**: Price chart with buy/sell trade markers
+
+### Run Benchmarks
+
+Compare strategy performance across different market conditions:
+```bash
+python benchmarks.py
+```
+
+Benchmark scenarios test:
+- **Volatility levels**: 0.5%, 2%, 5% (stable → choppy markets)
+- **Quote spreads**: 0.02, 0.05, 0.10 (tight → wide)
+- **Inventory skewing**: 0%, 1%, 5% (no adjustment → aggressive)
+- **Order arrival rates**: 20%, 50%, 80% (thin → thick markets)
+
+Results show which parameter combinations maximize profitability under different conditions.
+
 ## 📊 Understanding the Output
 
 The simulator provides detailed PnL decomposition:
@@ -168,6 +188,7 @@ This is a strong signal for quantitative trading, prop trading, and cryptocurren
 
 - **Python 3.8+**: Core language
 - **NumPy**: Numerical computations and random number generation
+- **Matplotlib**: Visualization of simulation results
 - **Pandas**: Data manipulation (optional, for extended analysis)
 
 ## 📝 License
