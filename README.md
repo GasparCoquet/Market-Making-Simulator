@@ -189,7 +189,7 @@ This is a strong signal for quantitative trading, prop trading, and cryptocurren
 - **Python 3.8+**: Core language
 - **NumPy**: Numerical computations and random number generation
 - **Matplotlib**: Visualization of simulation results
-- **Pandas**: Data manipulation (optional, for extended analysis)
+- **Pandas**: Data manipulation
 
 ## 📝 License
 
