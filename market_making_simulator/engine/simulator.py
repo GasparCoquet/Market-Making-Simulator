@@ -51,8 +51,7 @@ class MarketSimulator:
             dt: Time step
         """
         current_mid = self.order_book.get_mid_price()
-        price_change = np.random.normal(0, volatility * np.sqrt(dt)) * current_mid
-        new_mid = current_mid + price_change
+        new_mid = current_mid * np.exp(volatility * np.sqrt(dt) * np.random.normal())
         self.order_book.update_mid_price(new_mid)
         
     def simulate_order_flow(self, arrival_rate: float = 0.5) -> Optional[str]:
