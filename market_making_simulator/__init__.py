@@ -6,7 +6,7 @@ and market-making strategies with detailed PnL decomposition.
 """
 
 from .order_book import OrderBook
-from .market_maker import MarketMaker
+from .strategy.market_maker import MarketMaker
 from .pnl_tracker import PnLTracker
 from .simulator import MarketSimulator
 from .plotter import SimulationPlotter
