@@ -5,10 +5,10 @@ A comprehensive Python-based market-making simulator with a synthetic limit orde
 ## Purpose
 
 This simulator is designed to demonstrate understanding of:
-- **Market microstructure** - Order book dynamics, bid-ask spreads, liquidity depth
-- **Market-making strategies** - Quote placement, inventory management, risk control
-- **PnL attribution** - Decomposing profits into spread capture, inventory risk, and adverse selection
-- **Quantitative trading** - Understanding the challenges of providing liquidity in financial markets
+- **Market microstructure**: Order book dynamics, bid-ask spreads, liquidity depth
+- **Market-making strategies**: Quote placement, inventory management, risk control
+- **PnL attribution**: Decomposing profits into spread capture, inventory risk, and adverse selection
+- **Quantitative trading**: Understanding the challenges of providing liquidity in financial markets
 
 ## Features
 
