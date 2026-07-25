@@ -2,7 +2,7 @@
 
 A comprehensive Python-based market-making simulator with a synthetic limit order book. This simulator implements bid/ask quoting, inventory management, and detailed PnL decomposition (spread capture, inventory risk, adverse selection) to study liquidity provision and market microstructure.
 
-## 🎯 Purpose
+## Purpose
 
 This simulator is designed to demonstrate understanding of:
 - **Market microstructure** - Order book dynamics, bid-ask spreads, liquidity depth
@@ -10,7 +10,7 @@ This simulator is designed to demonstrate understanding of:
 - **PnL attribution** - Decomposing profits into spread capture, inventory risk, and adverse selection
 - **Quantitative trading** - Understanding the challenges of providing liquidity in financial markets
 
-## 🚀 Features
+## Features
 
 ### Core Components
 
@@ -38,18 +38,18 @@ This simulator is designed to demonstrate understanding of:
    - Configurable order arrival process
    - Comprehensive summary statistics
 
-## 📦 Installation
+## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/GasparCoquet/market-making-simulator.git
-cd market-making-simulator
+git clone https://github.com/GasparCoquet/Market-Making-Simulator.git
+cd Market-Making-Simulator
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-## 🎮 Quick Start
+## Quick Start
 
 Run the example script:
 ```bash
@@ -76,7 +76,7 @@ Benchmark scenarios test:
 
 Results show which parameter combinations maximize profitability under different conditions.
 
-## 📊 Understanding the Output
+## Understanding the Output
 
 The simulator provides detailed PnL decomposition:
 
@@ -116,7 +116,7 @@ PnL Decomposition:
 ============================================================
 ```
 
-## 🧪 Testing
+## Testing
 
 Run the comprehensive test suite:
 
@@ -130,7 +130,7 @@ Tests cover:
 - PnL decomposition accuracy
 - Simulation consistency and reproducibility
 
-## 🔧 Configuration
+## Configuration
 
 ### OrderBook Parameters
 - `initial_mid`: Starting mid price
@@ -151,7 +151,7 @@ Tests cover:
 - `dt`: Time step size
 - `random_seed`: Seed for reproducibility
 
-## 📚 Key Concepts
+## Key Concepts
 
 ### Inventory Skewing
 When the market maker accumulates inventory, it adjusts quotes to encourage mean reversion:
@@ -166,7 +166,7 @@ The market maker respects position limits to manage risk. When approaching limit
 ### Price Impact
 Large market orders that exceed available liquidity cause price impact, simulating real market behavior.
 
-## 🎯 Use Cases
+## Use Cases
 
 This simulator is valuable for:
 - **Learning**: Understanding market-making mechanics and risks
@@ -174,7 +174,7 @@ This simulator is valuable for:
 - **Interviews**: Demonstrating knowledge of market microstructure
 - **Analysis**: Studying the trade-offs in liquidity provision
 
-## 📈 Why This Matters
+## Why This Matters
 
 Market-making is fundamental to modern financial markets:
 - **Liquidity provision**: Market makers enable other traders to transact
@@ -182,20 +182,18 @@ Market-making is fundamental to modern financial markets:
 - **Risk management**: Understanding inventory risk and adverse selection is crucial
 - **Profitability**: Successful market-making requires balancing many competing factors
 
-This is a strong signal for quantitative trading, prop trading, and cryptocurrency trading roles as it demonstrates deep understanding of market microstructure.
-
-## 🛠️ Technical Stack
+## Technical Stack
 
 - **Python 3.8+**: Core language
 - **NumPy**: Numerical computations and random number generation
 - **Matplotlib**: Visualization of simulation results
 - **Pandas**: Data manipulation
 
-## 📝 License
+## License
 
 See [LICENSE](LICENSE) for details.
 
-## 📖 References
+## References
 
 This simulator demonstrates concepts from:
 - Market microstructure theory
