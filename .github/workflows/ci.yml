@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here writes to the repository, so drop the default token down to read.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every Python version, do not cancel the matrix on first failure.
+      fail-fast: false
+      matrix:
+        # The declared floor (requires-python >= 3.9), the newest release, and
+        # two versions in between. Every version listed here is also claimed in
+        # the classifiers in pyproject.toml.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Show resolved dependency versions
+        run: pip list
+
+      # Python 3.12 and later exit 5 when discovery finds nothing, but 3.9 and
+      # 3.11 exit 0, so a broken tests/ layout would pass silently there.
+      - name: Check tests were discovered
+        run: python -c "import unittest, sys; n = unittest.defaultTestLoader.discover('tests', top_level_dir='.').countTestCases(); print('discovered', n, 'test cases'); sys.exit(n == 0)"
+
+      - name: Run unittest suite
+        run: python -m unittest discover -s tests -t . -v
+
+  smoke:
+    name: Entry-point smoke test
+    runs-on: ubuntu-latest
+    # No matplotlib display on a CI runner, and example.py draws figures.
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run example.py
+        run: python example.py
+
+      - name: Run benchmarks.py
+        run: python benchmarks.py --paths 50

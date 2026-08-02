@@ -25,7 +25,6 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-PARTS
 
 # PyInstaller
 *.manifest
@@ -78,3 +77,6 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated figures from example.py
+plots/

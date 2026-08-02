@@ -1,10 +1,9 @@
 """
-Engine layer: Core simulation components.
-
-Includes order book, price dynamics, and simulation orchestration.
+Engine layer: market state, fill intensity, and simulation orchestration.
 """
 
-from .order_book import OrderBook
+from .market_state import MarketState
+from .fill_model import FillModel
 from .simulator import MarketSimulator
 
-__all__ = ["OrderBook", "MarketSimulator"]
+__all__ = ["MarketState", "FillModel", "MarketSimulator"]
