@@ -64,8 +64,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run example.py
+      # Both datasets, because they exercise different code: the equity path
+      # has a session close and no funding leg, the perpetual has the reverse,
+      # and a smoke test of one says nothing about the other. Steps are cut
+      # right down here; correctness lives in the unit suite, and this job
+      # exists to catch an entry point that no longer runs at all.
+      - name: Run example.py (us-equity)
         run: python example.py
 
-      - name: Run benchmarks.py
+      - name: Run example.py (crypto-perp)
+        run: python example.py --dataset crypto-perp --steps 7200
+
+      # Long enough to cross two session closes, so the flattening path is
+      # actually executed rather than merely configured.
+      - name: Run example.py (us-equity, two sessions)
+        run: python example.py --steps 46800
+
+      - name: Run benchmarks.py (us-equity)
         run: python benchmarks.py --paths 50
+
+      - name: Run benchmarks.py (crypto-perp)
+        run: python benchmarks.py --dataset crypto-perp --paths 10 --steps 25000

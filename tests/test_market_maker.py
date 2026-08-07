@@ -225,6 +225,59 @@ class TestPositionAccounting(unittest.TestCase):
         self.assertAlmostEqual(self.maker.get_average_buy_price(), 99.825, places=12)
 
 
+class TestFeeDenominations(unittest.TestCase):
+    """
+    Per unit and per notional, which is the equity and the crypto convention.
+
+    The distinction is not cosmetic. A per-share rebate is a fixed number of
+    cents whatever the price, so its value relative to the spread depends on
+    the share price. A per-notional fee is a fixed fraction of the trade, so on
+    a 5bp quote a 2bp fee always takes 40% of the gross edge, on a $10 token
+    and on a $100,000 contract alike.
+    """
+
+    def test_a_per_unit_rebate_ignores_the_price(self):
+        maker = MarketMaker(maker_rebate_per_unit=0.002)
+        self.assertAlmostEqual(maker.maker_fee(100.0, 10.0), 0.02, places=12)
+        self.assertAlmostEqual(maker.maker_fee(100_000.0, 10.0), 0.02, places=12)
+
+    def test_a_per_notional_fee_scales_with_the_price(self):
+        maker = MarketMaker(maker_rebate_bps=-2.0)
+        # 2bp of $1,000 of notional is 20 cents, paid.
+        self.assertAlmostEqual(maker.maker_fee(100.0, 10.0), -0.20, places=12)
+        self.assertAlmostEqual(maker.maker_fee(100_000.0, 0.01), -0.20, places=12)
+        self.assertAlmostEqual(maker.maker_fee(100_000.0, 10.0), -200.0, places=9)
+
+    def test_the_two_legs_add(self):
+        maker = MarketMaker(maker_rebate_per_unit=0.002, maker_rebate_bps=-2.0)
+        self.assertAlmostEqual(maker.maker_fee(100.0, 10.0),
+                               0.02 - 0.20, places=12)
+
+    def test_a_notional_fee_accrues_on_both_sides_and_stays_out_of_cash(self):
+        maker = MarketMaker(maker_rebate_bps=-2.0)
+        maker.execute_bid_fill(100.0, 10.0)
+        maker.execute_ask_fill(100.0, 10.0)
+        self.assertAlmostEqual(maker.rebates, -0.40, places=12)
+        # A flat round trip at the mid earns no gross PnL; the fee is the whole
+        # of the loss and it is reported beside gross rather than inside it.
+        self.assertAlmostEqual(maker.get_gross_pnl(100.0), 0.0, places=12)
+        self.assertAlmostEqual(maker.get_mark_to_market_pnl(100.0), -0.40,
+                               places=12)
+
+    def test_a_two_bp_fee_takes_forty_percent_of_a_five_bp_quote(self):
+        """The arithmetic behind the crypto grid's headline row."""
+        maker = MarketMaker(quote_spread=5.0, maker_rebate_bps=-2.0)
+        # Sell 0.01 contracts 5bp above a $100,000 mid: $50 of edge on the
+        # quote, but the fee is charged on the whole $1,000 of notional.
+        maker.execute_ask_fill(100_050.0, 0.01)
+        edge = 0.01 * (100_050.0 - 100_000.0)
+        self.assertAlmostEqual(edge, 0.50, places=12)
+        # 0.4002 rather than a round 0.4 because the fee is charged on the fill
+        # price, which is the quote, not on the mid the edge is measured
+        # against. The 2bp is 2bp of $100,050.
+        self.assertAlmostEqual(maker.rebates / edge, -0.4002, places=6)
+
+
 class TestConstruction(unittest.TestCase):
     """Invalid configurations are rejected up front."""
 

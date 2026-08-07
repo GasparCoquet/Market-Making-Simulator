@@ -249,6 +249,70 @@ class TestAdverseSelectionUnderInformedFlow(unittest.TestCase):
         self.assertLess(informed_mean, uninformed_mean - 3.0 * gap_standard_error)
 
 
+class TestTradeKinds(unittest.TestCase):
+    """
+    Quoted fills and close-outs are both trades, and only one of them is flow.
+
+    Everything downstream splits on this: the identity needs both, the fill
+    counters and the markout want only the quoted ones, and the close-out cost
+    is a diagnostic read off the difference.
+    """
+
+    def setUp(self):
+        self.tracker = PnLTracker()
+        self.tracker.record_trade(1.0, 'buy', 99.95, 10.0, 100.0, 0)
+        self.tracker.record_session_close(2.0, -10.0, 99.90, 100.0, 1)
+
+    def test_the_default_kind_is_a_quoted_fill(self):
+        self.assertEqual(self.tracker.trades[0]['kind'], 'quote')
+
+    def test_an_unknown_kind_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.tracker.record_trade(3.0, 'buy', 99.95, 1.0, 100.0, 2,
+                                      kind='hedge')
+
+    def test_spread_capture_includes_both(self):
+        # +0.5 of quoted edge, -1.0 of close-out cost.
+        self.assertAlmostEqual(self.tracker.get_spread_capture(), -0.5,
+                               places=12)
+
+    def test_the_splits_add_back_to_spread_capture(self):
+        self.assertAlmostEqual(self.tracker.get_quoted_edge(), 0.5, places=12)
+        self.assertAlmostEqual(self.tracker.get_session_close_cost(), 1.0,
+                               places=12)
+        self.assertAlmostEqual(
+            self.tracker.get_quoted_edge() - self.tracker.get_session_close_cost(),
+            self.tracker.get_spread_capture(), places=12)
+
+    def test_the_counters_describe_quoted_flow_only(self):
+        self.assertEqual(self.tracker.get_trade_count(), (1, 0))
+        self.assertAlmostEqual(self.tracker.get_filled_volume(), 10.0,
+                               places=12)
+        self.assertEqual(self.tracker.get_session_close_count(), 1)
+        self.assertAlmostEqual(self.tracker.get_session_close_volume(), 10.0,
+                               places=12)
+
+    def test_the_decomposition_reports_both_splits(self):
+        decomposition = self.tracker.get_pnl_decomposition()
+        self.assertAlmostEqual(decomposition['quoted_edge'], 0.5, places=12)
+        self.assertAlmostEqual(decomposition['session_close_cost'], 1.0,
+                               places=12)
+        # And neither is added into the identity.
+        self.assertAlmostEqual(
+            decomposition['gross_pnl'],
+            decomposition['spread_capture'] + decomposition['inventory_pnl'],
+            places=12)
+
+    def test_the_close_out_side_follows_the_sign_of_the_trade(self):
+        """Flattening a long is a sell, flattening a short is a buy."""
+        self.assertEqual(self.tracker.trades[1]['side'], 'sell')
+        tracker = PnLTracker()
+        tracker.record_session_close(1.0, +10.0, 100.10, 100.0, 0)
+        self.assertEqual(tracker.trades[0]['side'], 'buy')
+        # Either way the edge is negative: crossing the market always costs.
+        self.assertLess(tracker.get_spread_capture(), 0.0)
+
+
 class TestCounters(unittest.TestCase):
     """Trade counts and volumes."""
 

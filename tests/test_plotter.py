@@ -283,13 +283,48 @@ class TestEveryEntryPointDraws(PlotterTestCase):
 class TestWaterfallReconcilesOnTheFigure(PlotterTestCase):
     """The residual printed on the chart is the real one."""
 
-    def test_the_drawn_residual_is_zero_to_floating_point(self):
-        fig = self.plotter.plot_pnl_decomposition(self.summary)
+    @staticmethod
+    def drawn_residual(fig) -> float:
+        """Read the residual annotation off the waterfall axes."""
         residual_texts = [t.get_text() for t in fig.axes[0].texts
                           if t.get_text().startswith('Identity residual')]
-        self.assertEqual(len(residual_texts), 1)
-        residual = float(residual_texts[0].split(':')[1])
-        self.assertLess(residual, 1e-9)
+        assert len(residual_texts) == 1, residual_texts
+        return float(residual_texts[0].split(':')[1])
+
+    @staticmethod
+    def bar_labels(fig) -> list:
+        """The x tick labels of the waterfall, in drawing order."""
+        return [label.get_text() for label in fig.axes[0].get_xticklabels()]
+
+    def test_the_drawn_residual_is_zero_to_floating_point(self):
+        fig = self.plotter.plot_pnl_decomposition(self.summary)
+        self.assertLess(self.drawn_residual(fig), 1e-9)
+
+    def test_no_funding_bar_when_the_instrument_has_no_funding(self):
+        """A permanent zero bar reads as a measurement rather than an absence."""
+        fig = self.plotter.plot_pnl_decomposition(self.summary)
+        self.assertEqual(self.summary['funding'], 0.0)
+        self.assertNotIn('Funding', self.bar_labels(fig))
+
+    def test_a_funding_term_is_drawn_and_still_reconciles(self):
+        funded = dict(self.summary)
+        funded['funding'] = -12.5
+        funded['net_pnl'] = (funded['gross_pnl'] + funded['rebates']
+                             + funded['funding'] - funded['liquidation_cost'])
+        fig = self.plotter.plot_pnl_decomposition(funded)
+        self.assertIn('Funding', self.bar_labels(fig))
+        self.assertLess(self.drawn_residual(fig), 1e-9)
+
+    def test_dropping_a_funding_term_from_the_chart_would_fail_the_residual(self):
+        """
+        The reconciliation must cover funding whether or not a bar is drawn,
+        or a chart could omit a real cash flow and still advertise itself as
+        exact. Feeding a net PnL that ignores funding has to show up.
+        """
+        inconsistent = dict(self.summary)
+        inconsistent['funding'] = -12.5
+        fig = self.plotter.plot_pnl_decomposition(inconsistent)
+        self.assertAlmostEqual(self.drawn_residual(fig), 12.5, places=6)
 
 
 if __name__ == '__main__':

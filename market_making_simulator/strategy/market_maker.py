@@ -15,6 +15,14 @@ move down: the ask becomes easier to lift (we sell) and the bid harder to hit
 (we stop buying). That is what "lean against the wind" means. Widening the ask
 when long, which is the intuitive-sounding rule, does the opposite of what is
 wanted, because a wider ask is *less* likely to be lifted.
+
+Fees come in two denominations because the two markets quote them differently.
+A US equity venue pays a maker rebate per *share*, around $0.0020 to $0.0030,
+independent of the price. A crypto venue charges or pays a fee in basis points
+of *notional*, so the same fill on a $100 contract and a $60,000 contract costs
+600 times as much. Both are supported and both accrue to `rebates`, which is
+held outside `cash` so that the identity gross_pnl == spread_capture +
+inventory_pnl stays exact. Funding is held outside `cash` for the same reason.
 """
 
 from typing import Tuple, Optional, TYPE_CHECKING
@@ -34,6 +42,7 @@ class MarketMaker:
         max_inventory: float = 100.0,
         inventory_skew_factor: float = 0.01,
         maker_rebate_per_unit: float = 0.0,
+        maker_rebate_bps: float = 0.0,
         risk_manager: Optional[RiskManager] = None,
     ):
         """
@@ -45,8 +54,15 @@ class MarketMaker:
                 would breach it
             inventory_skew_factor: gamma, the price units by which the
                 reservation price shifts per unit of inventory
-            maker_rebate_per_unit: Exchange rebate received per unit filled.
-                Negative values represent a fee.
+            maker_rebate_per_unit: Exchange rebate received per unit filled, in
+                price units per unit of size. The US equity convention, where a
+                venue pays around $0.0020 per share. Negative values are a fee.
+            maker_rebate_bps: Exchange rebate received per fill as basis points
+                of notional. The crypto convention, where a venue charges around
+                2bp and only the top tiers earn a rebate. Negative values are a
+                fee, so a 2bp maker fee is `maker_rebate_bps=-2.0`. Additive
+                with `maker_rebate_per_unit`; a venue normally uses one or the
+                other, and setting both charges both.
             risk_manager: Optional risk overlay applied to the quotes
         """
         if quote_spread < 0:
@@ -61,13 +77,15 @@ class MarketMaker:
         self.max_inventory = max_inventory
         self.inventory_skew_factor = inventory_skew_factor
         self.maker_rebate_per_unit = maker_rebate_per_unit
+        self.maker_rebate_bps = maker_rebate_bps
         self.risk_manager = risk_manager
 
         self.inventory = 0.0
-        # Trading cash only. Rebates are held separately so that the identity
-        # gross_pnl == spread_capture + inventory_pnl stays exact.
+        # Trading cash only. Rebates and funding are held separately so that
+        # the identity gross_pnl == spread_capture + inventory_pnl stays exact.
         self.cash = 0.0
         self.rebates = 0.0
+        self.funding = 0.0
 
         self.total_buy_value = 0.0
         self.total_sell_value = 0.0
@@ -124,13 +142,23 @@ class MarketMaker:
         if self.risk_manager is not None:
             self.risk_manager.update(self.get_mark_to_market_pnl(current_mid))
 
+    def maker_fee(self, price: float, quantity: float) -> float:
+        """
+        Rebate earned on one passive fill, negative when it is a fee.
+
+        The per-unit and per-notional legs are added, so a venue that quotes in
+        one denomination simply leaves the other at zero.
+        """
+        return (self.maker_rebate_per_unit
+                + 1e-4 * self.maker_rebate_bps * price) * quantity
+
     def execute_bid_fill(self, price: float, quantity: float):
         """Our bid was hit, so we bought `quantity` at `price`."""
         if quantity <= 0:
             return
         self.inventory += quantity
         self.cash -= price * quantity
-        self.rebates += self.maker_rebate_per_unit * quantity
+        self.rebates += self.maker_fee(price, quantity)
         self.total_buy_value += price * quantity
         self.total_bought += quantity
 
@@ -140,9 +168,64 @@ class MarketMaker:
             return
         self.inventory -= quantity
         self.cash += price * quantity
-        self.rebates += self.maker_rebate_per_unit * quantity
+        self.rebates += self.maker_fee(price, quantity)
         self.total_sell_value += price * quantity
         self.total_sold += quantity
+
+    def execute_flatten(self, price: float) -> float:
+        """
+        Cross the market to go flat, at a session close or on demand.
+
+        This is a *taker* trade, so it earns no maker rebate. The price the
+        simulator passes already crosses the market's reference half-spread, so
+        the cost of getting flat lands in spread capture as negative edge and
+        the PnL identity absorbs it with no special case. Charging a maker
+        rebate here as well would pay us for removing liquidity.
+
+        Taker fees are not modelled, matching the rest of this simulator; the
+        half-spread paid is the dominant cost and the omission understates the
+        cost of flattening rather than flattering it.
+
+        Args:
+            price: The price we get filled at, already inclusive of the crossed
+                half-spread
+
+        Returns:
+            The signed quantity of the resulting trade, negative for a sale.
+            Zero when the position was already flat, in which case nothing is
+            recorded.
+        """
+        position = self.inventory
+        if position == 0.0:
+            return 0.0
+
+        # Selling a long adds cash, buying back a short removes it, which is
+        # exactly `+ price * position` with the sign of the position.
+        self.cash += price * position
+        self.inventory = 0.0
+
+        if position > 0:
+            self.total_sell_value += price * position
+            self.total_sold += position
+        else:
+            self.total_buy_value += price * (-position)
+            self.total_bought += -position
+
+        return -position
+
+    def accrue_funding(self, amount: float) -> None:
+        """
+        Record a funding payment.
+
+        Held outside `cash` for the same reason rebates are: `cash` is the
+        trading leg of the PnL identity and anything else added to it would
+        break the reconciliation between the tracker's decomposition and this
+        object's mark to market.
+
+        Args:
+            amount: Signed cash flow, negative when we pay
+        """
+        self.funding += amount
 
     def get_net_cash_flow(self) -> float:
         """
@@ -166,17 +249,28 @@ class MarketMaker:
         return self.cash + self.inventory * current_mid
 
     def get_mark_to_market_pnl(self, current_mid: float) -> float:
-        """Gross PnL plus rebates earned. What the risk overlay sees."""
-        return self.get_gross_pnl(current_mid) + self.rebates
+        """
+        Gross PnL plus rebates and funding. What the risk overlay sees.
+
+        Funding is a realised cash flow the moment it settles, so a book that is
+        bleeding funding should show it in the drawdown the kill-switch tests
+        rather than only in the final waterfall.
+        """
+        return self.get_gross_pnl(current_mid) + self.rebates + self.funding
 
     def get_average_buy_price(self) -> Optional[float]:
-        """Volume-weighted average price of all buys."""
+        """
+        Volume-weighted average price of all buys, including any flattening.
+
+        A session close is a real trade, so it is counted here. The quoted-fill
+        counters live on `PnLTracker`, which separates the two.
+        """
         if self.total_bought == 0:
             return None
         return self.total_buy_value / self.total_bought
 
     def get_average_sell_price(self) -> Optional[float]:
-        """Volume-weighted average price of all sells."""
+        """Volume-weighted average price of all sells, including any flattening."""
         if self.total_sold == 0:
             return None
         return self.total_sell_value / self.total_sold

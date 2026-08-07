@@ -11,7 +11,10 @@ import unittest
 import numpy as np
 
 from market_making_simulator import annualised_volatility, per_step_volatility
-from market_making_simulator.units import SECONDS_PER_TRADING_YEAR
+from market_making_simulator.units import (
+    SECONDS_PER_CALENDAR_YEAR,
+    SECONDS_PER_TRADING_YEAR,
+)
 
 
 class TestPerStepVolatility(unittest.TestCase):
@@ -56,6 +59,65 @@ class TestPerStepVolatility(unittest.TestCase):
         self.assertEqual(SECONDS_PER_TRADING_YEAR, 252 * 6.5 * 3600)
 
 
+class TestCalendars(unittest.TestCase):
+    """
+    "Annualised" means nothing until you say how many seconds are in the year.
+
+    A cash equity trades 252 sessions of 6.5 hours. A perpetual swap trades
+    every second of every day. The second year is 5.35 times longer, so the
+    same headline volatility is spread over sqrt(5.35) = 2.31 times more
+    standard deviations, and feeding a 24/7 asset's annualised figure through
+    the equity calendar overstates its per-second sigma by exactly that factor.
+    """
+
+    def test_the_calendar_year_is_stated_in_seconds(self):
+        """365 days of 24 hours, with no session to exclude."""
+        self.assertEqual(SECONDS_PER_CALENDAR_YEAR, 365 * 24 * 3600)
+
+    def test_the_trading_calendar_is_the_default(self):
+        """Existing callers passed no calendar and must be unaffected."""
+        self.assertEqual(
+            per_step_volatility(0.25, 1.0),
+            per_step_volatility(0.25, 1.0,
+                                seconds_per_year=SECONDS_PER_TRADING_YEAR),
+        )
+
+    def test_the_wrong_calendar_overstates_a_24_7_asset(self):
+        correct = per_step_volatility(
+            0.55, 1.0, seconds_per_year=SECONDS_PER_CALENDAR_YEAR)
+        misread = per_step_volatility(
+            0.55, 1.0, seconds_per_year=SECONDS_PER_TRADING_YEAR)
+        self.assertAlmostEqual(
+            misread / correct,
+            np.sqrt(SECONDS_PER_CALENDAR_YEAR / SECONDS_PER_TRADING_YEAR),
+            places=12,
+        )
+
+    def test_a_higher_headline_can_be_a_smaller_per_second_move(self):
+        """
+        The calibration the crypto dataset uses: 55% annualised 24/7 against
+        25% annualised on a session calendar. The headline is 2.2x higher and
+        the per-second sigma is slightly lower.
+        """
+        crypto = per_step_volatility(
+            0.55, 1.0, seconds_per_year=SECONDS_PER_CALENDAR_YEAR)
+        equity = per_step_volatility(0.25, 1.0)
+        self.assertAlmostEqual(crypto, 9.794e-5, delta=1e-8)
+        self.assertAlmostEqual(equity, 1.0295e-4, delta=1e-8)
+        self.assertLess(crypto, equity)
+
+    def test_round_trip_through_a_matching_calendar(self):
+        for seconds_per_year in (SECONDS_PER_TRADING_YEAR,
+                                 SECONDS_PER_CALENDAR_YEAR):
+            for annual in (0.10, 0.55, 1.20):
+                per_step = per_step_volatility(
+                    annual, 5.0, seconds_per_year=seconds_per_year)
+                self.assertAlmostEqual(
+                    annualised_volatility(per_step, 5.0,
+                                          seconds_per_year=seconds_per_year),
+                    annual, places=12)
+
+
 class TestValidation(unittest.TestCase):
     """Invalid inputs are rejected up front."""
 
@@ -72,6 +134,12 @@ class TestValidation(unittest.TestCase):
     def test_negative_per_step_volatility_rejected(self):
         with self.assertRaises(ValueError):
             annualised_volatility(-1e-4, 1.0)
+
+    def test_non_positive_calendar_rejected(self):
+        with self.assertRaises(ValueError):
+            per_step_volatility(0.25, 1.0, seconds_per_year=0.0)
+        with self.assertRaises(ValueError):
+            annualised_volatility(1e-4, 1.0, seconds_per_year=-1.0)
 
 
 if __name__ == '__main__':

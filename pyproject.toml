@@ -8,7 +8,7 @@ name = "market-making-simulator"
 # Single-sourced from market_making_simulator.__version__ so the installed
 # metadata and the runtime attribute cannot drift apart.
 dynamic = ["version"]
-description = "Avellaneda-Stoikov style market-making simulator with an exact PnL decomposition"
+description = "Avellaneda-Stoikov style market-making simulator with an exact PnL decomposition, calibrated for both cash equities and crypto perpetuals"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -20,6 +20,9 @@ keywords = [
     "avellaneda-stoikov",
     "quantitative-finance",
     "simulation",
+    "crypto",
+    "perpetual-swap",
+    "funding-rate",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

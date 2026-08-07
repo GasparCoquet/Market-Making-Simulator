@@ -27,9 +27,30 @@ computed path by path and their standard error comes from the distribution of
 those paired differences, which is much tighter than the standard error of
 either configuration on its own.
 
+Two grids
+---------
+`--dataset us-equity` sweeps the quoting parameters of the cash-equity
+calibration: spread, skew, market thickness, informed flow, volatility and the
+risk overlay. It is the grid the README's headline table comes from and its
+scenarios are specified in absolute price units, because they were.
+
+`--dataset crypto-perp` sweeps the four axes that are specific to a perpetual
+swap: the maker fee denomination, the funding leg, the session close it does
+not have, and the interaction between those and the inventory skew. Its
+scenarios are `dataclasses.replace` of the shipped `CRYPTO_PERP` dataset, so
+each row moves exactly one field of a calibration whose geometry is otherwise
+identical to the equity one.
+
+Common random numbers hold across both grids and within each: none of the
+crypto axes draws from the generator. Funding and session closes are pure
+functions of the step index, and a fee is applied after the fill is decided, so
+turning any of them on leaves the price path and the fill sequence untouched.
+The paired differences for those axes are therefore almost noise-free.
+
 Usage:
     python benchmarks.py
     python benchmarks.py --paths 2000 --seed 7
+    python benchmarks.py --dataset crypto-perp
 """
 
 import argparse
@@ -37,12 +58,15 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 from market_making_simulator import (
+    CRYPTO_PERP,
+    DATASET_NAMES,
+    Dataset,
     FillModel,
     MarketMaker,
     MarketSimulator,
@@ -54,12 +78,27 @@ from market_making_simulator import (
 # Imported rather than hardcoded in the report text, so the printed caveat
 # cannot drift away from the horizon the tracker actually uses.
 from market_making_simulator.analytics.pnl_tracker import DEFAULT_MARKOUT_HORIZON
+from market_making_simulator.datasets import (
+    EQUITY_SESSION_STEPS,
+    HOURLY_FUNDING_RATE,
+    HOURLY_STEPS,
+)
 
 DEFAULT_PATHS = 500
 DEFAULT_SEED = 12345
 DEFAULT_STEPS = 2000
 
-# Metrics collected per path. Order fixes the column order downstream.
+# The crypto grid runs a full 24-hour day, which is 43 times as many steps per
+# path as the equity grid's 33 minutes, so it runs a fifth of the paths to keep
+# the wall clock in the same order. The axes it measures are nearly noise-free
+# under pairing, because none of them touches the generator, so the loss of
+# precision falls on the unpaired means rather than on the comparisons the grid
+# exists to make.
+CRYPTO_DEFAULT_PATHS = 100
+
+# Metrics collected per path. Order fixes the column order downstream. The last
+# four are zero for a calibration without the corresponding market structure,
+# which is why the equity report does not print them.
 _METRICS = (
     "net_pnl",
     "gross_pnl",
@@ -70,6 +109,13 @@ _METRICS = (
     "abs_final_inventory",
     "max_drawdown",
     "halted",
+    "filled_volume",
+    "quoted_edge",
+    "rebates",
+    "funding",
+    "session_close_cost",
+    "mean_abs_inventory",
+    "peak_abs_inventory",
 )
 
 
@@ -159,6 +205,148 @@ def build_scenarios(num_steps: int = DEFAULT_STEPS) -> List[ScenarioConfig]:
     return scenarios
 
 
+@dataclass(frozen=True)
+class DatasetScenario:
+    """
+    One point of a dataset grid.
+
+    Where `ScenarioConfig` spells out the equity calibration in absolute price
+    units, this carries a whole `Dataset` and lets `dataclasses.replace` move
+    one dimensionless field at a time. That is what makes a crypto grid
+    expressible at all: the fee denomination, the funding cadence and the
+    presence of a session close are properties of the instrument, not knobs on
+    the quoter, and they have no absolute-price representation to sweep.
+
+    Frozen for the same reason `ScenarioConfig` is: it crosses a process
+    boundary.
+    """
+
+    name: str
+    dataset: Dataset
+    kill_switch_drawdown: Optional[float] = None
+
+
+Scenario = Union[ScenarioConfig, "DatasetScenario"]
+
+
+def _metrics_from(summary: Dict, halted: bool) -> Dict[str, float]:
+    """
+    Project a run summary onto `_METRICS`.
+
+    One projection for both grids, so a metric can never be read off a
+    different key in one report than in the other.
+    """
+    return {
+        "net_pnl": summary["net_pnl"],
+        "gross_pnl": summary["gross_pnl"],
+        "spread_capture": summary["spread_capture"],
+        "inventory_pnl": summary["inventory_pnl"],
+        "adverse_selection": summary["adverse_selection"],
+        "fills": float(summary["num_trades"]),
+        "abs_final_inventory": abs(summary["final_inventory"]),
+        "max_drawdown": summary["max_drawdown"],
+        "halted": 1.0 if halted else 0.0,
+        "filled_volume": summary["filled_volume"],
+        "quoted_edge": summary["quoted_edge"],
+        "rebates": summary["rebates"],
+        "funding": summary["funding"],
+        "session_close_cost": summary["session_close_cost"],
+        "mean_abs_inventory": summary["mean_abs_inventory"],
+        "peak_abs_inventory": summary["peak_abs_inventory"],
+    }
+
+
+def run_dataset_path(scenario: DatasetScenario, seed: int) -> Dict[str, float]:
+    """
+    Run one path of one dataset scenario.
+
+    Args:
+        scenario: Dataset and risk setting for this row
+        seed: Seed for this path's generator
+
+    Returns:
+        One value per entry of `_METRICS`.
+    """
+    simulator, summary = scenario.dataset.run(
+        random_seed=seed,
+        kill_switch_drawdown=scenario.kill_switch_drawdown,
+    )
+    risk_manager = simulator.market_maker.risk_manager
+    halted = bool(risk_manager is not None and risk_manager.is_halted)
+    return _metrics_from(summary, halted)
+
+
+def build_crypto_scenarios(num_steps: int = CRYPTO_PERP.default_steps
+                           ) -> List[DatasetScenario]:
+    """
+    The perpetual-swap grid.
+
+    The first entry is the shipped calibration and every paired difference is
+    taken against it. Each other entry replaces exactly one field, so a
+    difference reads as the effect of that field.
+
+    The rows are chosen to answer the four questions the crypto section of the
+    README asks, and nothing else:
+
+      * fees. Three rows spanning the real tier range on a perpetual venue,
+        from the standard 2bp maker fee through zero to a 0.5bp rebate. Because
+        the charge is on notional, its size is set by traded volume rather than
+        by edge per fill, which is the whole difference from the per-share
+        convention an equity venue uses.
+      * funding. Off, at the shipped hourly rate, at the same rate settled
+        eight-hourly, and at a hundred times the rate. The eight-hourly row is
+        a control: the same rate per unit time in coarser settlements should
+        move the mean by nothing, and if it does then the interval and the rate
+        are not composing the way the model claims.
+      * the session close a perpetual does not have. One row gives the perp an
+        equity-style 6.5-hour flatten so the cost of the mechanic is priced on
+        an otherwise identical path.
+      * the interaction. With the inventory lean switched off, the position is
+        a random walk into the limit, and the flatten is the only thing that
+        ever resets it. Running skew-off with and without the close is the
+        measurement of what "no overnight hedge" actually costs.
+
+    Args:
+        num_steps: Steps per path, applied to every scenario
+
+    Returns:
+        Scenario list, baseline first.
+    """
+    base = replace(CRYPTO_PERP, default_steps=num_steps)
+    equity_style_close = min(EQUITY_SESSION_STEPS, num_steps)
+
+    return [
+        DatasetScenario("crypto baseline (-2bp)", base),
+        # Fees. The denominator is notional, so these move with volume.
+        DatasetScenario("maker fee 0bp",
+                        replace(base, maker_rebate_bps=0.0)),
+        DatasetScenario("maker rebate +0.5bp",
+                        replace(base, maker_rebate_bps=0.5)),
+        # Funding. Off, coarser, and stressed.
+        DatasetScenario("funding off",
+                        replace(base, funding_interval_steps=None,
+                                funding_rate_per_interval=0.0)),
+        DatasetScenario("funding 8-hourly",
+                        replace(base, funding_interval_steps=8 * HOURLY_STEPS,
+                                funding_rate_per_interval=8 * HOURLY_FUNDING_RATE)),
+        DatasetScenario("funding 100x (stress)",
+                        replace(base,
+                                funding_rate_per_interval=100 * HOURLY_FUNDING_RATE)),
+        # The close a perpetual does not have, priced on an identical path.
+        DatasetScenario("flatten every 6.5h",
+                        replace(base, session_steps=equity_style_close)),
+        # And the interaction that makes the close worth more than its cost.
+        DatasetScenario("skew 0.00 (none)",
+                        replace(base, skew_bps_per_clip=0.0)),
+        DatasetScenario("skew 0.00 + 6.5h flatten",
+                        replace(base, skew_bps_per_clip=0.0,
+                                session_steps=equity_style_close)),
+        # Adverse selection, for comparability with the equity grid's axis.
+        DatasetScenario("informed 0%",
+                        replace(base, informed_fraction=0.0)),
+    ]
+
+
 def run_path(config: ScenarioConfig, seed: int) -> Dict[str, float]:
     """
     Run one path of one configuration.
@@ -206,24 +394,23 @@ def run_path(config: ScenarioConfig, seed: int) -> Dict[str, float]:
     )
     simulator.run(num_steps=config.num_steps, volatility=volatility, dt=1.0)
 
-    summary = simulator.get_summary()
-    return {
-        "net_pnl": summary["net_pnl"],
-        "gross_pnl": summary["gross_pnl"],
-        "spread_capture": summary["spread_capture"],
-        "inventory_pnl": summary["inventory_pnl"],
-        "adverse_selection": summary["adverse_selection"],
-        "fills": float(summary["num_trades"]),
-        "abs_final_inventory": abs(summary["final_inventory"]),
-        "max_drawdown": summary["max_drawdown"],
-        "halted": 1.0 if (risk_manager is not None and risk_manager.is_halted) else 0.0,
-    }
+    return _metrics_from(
+        simulator.get_summary(),
+        halted=bool(risk_manager is not None and risk_manager.is_halted),
+    )
 
 
-def _run_batch(task: Tuple[ScenarioConfig, Tuple[int, ...]]) -> List[Dict[str, float]]:
+def _runner_for(scenario: Scenario):
+    """Pick the path runner that matches this scenario's flavour."""
+    return (run_dataset_path if isinstance(scenario, DatasetScenario)
+            else run_path)
+
+
+def _run_batch(task: Tuple[Scenario, Tuple[int, ...]]) -> List[Dict[str, float]]:
     """Worker entry point. Kept module level so it survives process spawn."""
     config, seeds = task
-    return [run_path(config, seed) for seed in seeds]
+    runner = _runner_for(config)
+    return [runner(config, seed) for seed in seeds]
 
 
 def _chunks(seeds: Sequence[int], size: int) -> List[Tuple[int, ...]]:
@@ -232,7 +419,7 @@ def _chunks(seeds: Sequence[int], size: int) -> List[Tuple[int, ...]]:
 
 
 def run_scenario(
-    config: ScenarioConfig,
+    config: Scenario,
     seeds: Sequence[int],
     executor: Optional[ProcessPoolExecutor] = None,
 ) -> Dict[str, np.ndarray]:
@@ -250,7 +437,8 @@ def run_scenario(
         Metric name to array of length len(seeds), in seed order.
     """
     if executor is None:
-        records = [run_path(config, seed) for seed in seeds]
+        runner = _runner_for(config)
+        records = [runner(config, seed) for seed in seeds]
     else:
         batches = _chunks(seeds, max(1, len(seeds) // 32))
         records = []
@@ -267,7 +455,7 @@ def _standard_error(sample: np.ndarray) -> float:
     return float(sample.std(ddof=1) / np.sqrt(sample.size))
 
 
-def crossing_inventory(config: ScenarioConfig) -> float:
+def crossing_inventory(config: Scenario) -> float:
     """
     Inventory at which our own quote reaches the mid.
 
@@ -278,22 +466,40 @@ def crossing_inventory(config: ScenarioConfig) -> float:
     negative spread capture rather than as price risk.
 
     Args:
-        config: Scenario parameters
+        config: Scenario parameters, either flavour
 
     Returns:
-        The threshold, or infinity when the skew factor is zero.
+        The threshold in units of the instrument, or infinity when the skew
+        factor is zero.
     """
+    if isinstance(config, DatasetScenario):
+        return config.dataset.crossing_inventory
     if config.inventory_skew_factor <= 0:
         return float("inf")
     return config.quote_spread / config.inventory_skew_factor
 
 
-def summarise(config: ScenarioConfig, metrics: Dict[str, np.ndarray]) -> Dict[str, float]:
+def crossing_clips(config: Scenario) -> float:
+    """
+    The same threshold expressed in clips, which transfers across price scales.
+
+    Half a clip on a $100 share and half a clip on a $100,000 contract are the
+    same statement about the quoting rule. Five units and 0.005 contracts are
+    not, and the units column is unreadable on the crypto grid for that reason.
+    """
+    quote_size = (config.dataset.quote_size
+                  if isinstance(config, DatasetScenario)
+                  else config.quote_size)
+    return crossing_inventory(config) / quote_size
+
+
+def summarise(config: Scenario, metrics: Dict[str, np.ndarray]) -> Dict[str, float]:
     """Collapse one configuration's paths into a single summary row."""
     net = metrics["net_pnl"]
     return {
         "scenario": config.name,
         "cross_q": crossing_inventory(config),
+        "cross_clips": crossing_clips(config),
         "net_pnl": float(net.mean()),
         "se": _standard_error(net),
         "p5": float(np.percentile(net, 5)),
@@ -304,6 +510,15 @@ def summarise(config: ScenarioConfig, metrics: Dict[str, np.ndarray]) -> Dict[st
         "adv_sel": float(metrics["adverse_selection"].mean()),
         "adv_se": _standard_error(metrics["adverse_selection"]),
         "p_halt": float(metrics["halted"].mean()),
+        "gross_pnl": float(metrics["gross_pnl"].mean()),
+        "quoted_edge": float(metrics["quoted_edge"].mean()),
+        "rebates": float(metrics["rebates"].mean()),
+        "funding": float(metrics["funding"].mean()),
+        "funding_se": _standard_error(metrics["funding"]),
+        "close_out": float(metrics["session_close_cost"].mean()),
+        "volume": float(metrics["filled_volume"].mean()),
+        "mean_inv": float(metrics["mean_abs_inventory"].mean()),
+        "peak_inv": float(metrics["peak_abs_inventory"].mean()),
     }
 
 
@@ -412,6 +627,38 @@ def _format_summary(summary: pd.DataFrame) -> str:
     return table.to_string(index=False)
 
 
+def _format_crypto_summary(summary: pd.DataFrame) -> str:
+    """
+    Render the perpetual grid, with the waterfall terms it exists to measure.
+
+    Different columns from the equity table because different things move. The
+    equity grid sweeps quoting parameters, so it prints the fill count and the
+    inventory they produce. This grid sweeps the three cash flows a perpetual
+    adds, so it prints each of them next to the gross PnL they are charged
+    against, which is the only way to see that one of them is the same order as
+    the edge and the other two are not.
+    """
+    table = pd.DataFrame({
+        "scenario": summary["scenario"],
+        "net PnL": summary["net_pnl"].map("{:>9.2f}".format),
+        "SE": summary["se"].map("{:>6.2f}".format),
+        "P(loss)": summary["p_loss"].map("{:>6.1%}".format),
+        "gross": summary["gross_pnl"].map("{:>8.2f}".format),
+        "fees": summary["rebates"].map("{:>9.2f}".format),
+        "funding": summary["funding"].map("{:>8.3f}".format),
+        "close-out": summary["close_out"].map("{:>7.2f}".format),
+        "fills": summary["fills"].map("{:>6.0f}".format),
+        # In clips, so the column is readable at a 0.01-contract lot size and
+        # comparable with the equity grid's inventory columns.
+        "mean |inv|": (summary["mean_inv"] / CRYPTO_PERP.quote_size)
+        .map("{:>7.2f}".format),
+        "peak |inv|": (summary["peak_inv"] / CRYPTO_PERP.quote_size)
+        .map("{:>7.2f}".format),
+        "max DD": summary["max_dd"].map("{:>8.2f}".format),
+    })
+    return table.to_string(index=False)
+
+
 def _format_differences(differences: pd.DataFrame) -> str:
     """Render the paired difference table."""
     table = pd.DataFrame({
@@ -487,22 +734,105 @@ def print_report(
     print()
 
 
+def print_crypto_report(
+    summary: pd.DataFrame,
+    differences: pd.DataFrame,
+    num_paths: int,
+    base_seed: int,
+    num_steps: int,
+    wall_clock: float,
+    dataset: Dataset,
+) -> None:
+    """Print the perpetual grid with the caveats a reader needs for it."""
+    table = _format_crypto_summary(summary)
+    # Rule width read off the rendered table, so a column change cannot leave
+    # the banner shorter or longer than the thing it is ruling.
+    width = max(len(line) for line in table.split("\n"))
+
+    print()
+    print("=" * width)
+    print("MONTE CARLO BENCHMARK, PERPETUAL SWAP, RANKED BY MEAN NET PnL")
+    print("=" * width)
+    print(
+        f"{num_paths} paths per configuration, {num_steps} steps per path "
+        f"({dataset.hours(num_steps):.1f} hours at "
+        f"{dataset.seconds_per_step:g}s per step), "
+        f"seeds {base_seed}..{base_seed + num_paths - 1}, "
+        f"{wall_clock:.1f}s wall clock."
+    )
+    print(
+        f"Calibration: {dataset.description}. A clip is "
+        f"{dataset.quote_size:g} {dataset.unit} = "
+        f"${dataset.notional_per_clip:,.0f} of notional, the same clip the "
+        f"equity grid quotes, and every\ndimensionless quantity matches the "
+        "equity calibration, so the rows below isolate market structure "
+        "rather than a spread that\nwas chosen to differ. Absolute levels are "
+        "meaningless in both grids; only the paired comparisons carry "
+        "information.\n"
+        "\n"
+        "'gross' is PnL at mid before any of the three adjustments beside it. "
+        "'fees' is the maker rebate, negative when it is a fee,\nand is "
+        "charged on notional so it scales with volume rather than with edge "
+        "per fill. 'funding' is the perpetual leg, signed,\nnegative when we "
+        "paid. 'close-out' is the cost of flattening at a session close, which "
+        "is already inside gross PnL as negative\nspread capture and is shown "
+        "here to be read, not added. It is zero on every row that keeps the "
+        "perpetual's 24/7 structure.\n"
+        "Inventory is in clips. The mean is taken over every step of the path "
+        "rather than at the end, because a book that is\nflattened on a "
+        "schedule ends flat whatever it carried in between, and the mean is "
+        "also the quantity funding is charged on.\n"
+        f"Adverse selection is a signed {DEFAULT_MARKOUT_HORIZON}-step markout "
+        "over quoted fills only; a close-out is a trade we initiated and "
+        "cannot\nspeak to whether our quotes were picked off."
+    )
+    print()
+    print(table)
+
+    print()
+    print("=" * width)
+    print("PAIRED DIFFERENCE VERSUS THE SHIPPED CALIBRATION")
+    print("=" * width)
+    print(
+        "None of the axes above draws from the generator: fees apply after a "
+        "fill is decided, and funding and session closes are\nfunctions of the "
+        "step index. Path k therefore faces an identical price path and an "
+        "identical arrival sequence in every row\nexcept the two that change "
+        "the skew or the informed fraction, which move the quotes and so move "
+        f"the fills. t is the paired\nt-statistic on {num_paths - 1} degrees "
+        "of freedom; |t| above about 2 is significant at the 5% level."
+    )
+    print()
+    print(_format_differences(differences))
+    print()
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Command line interface."""
     parser = argparse.ArgumentParser(
         description="Monte Carlo benchmark of market-making configurations."
     )
     parser.add_argument(
-        "--paths", type=int, default=DEFAULT_PATHS,
-        help=f"Paths per configuration (default {DEFAULT_PATHS})",
+        "--dataset", choices=DATASET_NAMES, default="us-equity",
+        help="Which grid to run. us-equity sweeps quoting parameters; "
+             "crypto-perp sweeps the fee, funding and session structure of a "
+             "perpetual swap (default us-equity)",
+    )
+    parser.add_argument(
+        "--paths", type=int, default=None,
+        help=f"Paths per configuration (default {DEFAULT_PATHS} for us-equity, "
+             f"{CRYPTO_DEFAULT_PATHS} for crypto-perp, whose paths are "
+             f"{CRYPTO_PERP.default_steps / DEFAULT_STEPS:.0f}x longer)",
     )
     parser.add_argument(
         "--seed", type=int, default=DEFAULT_SEED,
         help=f"Base seed; path k uses seed+k (default {DEFAULT_SEED})",
     )
     parser.add_argument(
-        "--steps", type=int, default=DEFAULT_STEPS,
-        help=f"Steps per path (default {DEFAULT_STEPS})",
+        "--steps", type=int, default=None,
+        help=f"Steps per path (default {DEFAULT_STEPS} for us-equity, "
+             f"{CRYPTO_PERP.default_steps} for crypto-perp, which is a full "
+             f"24-hour day)",
     )
     parser.add_argument(
         "--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2),
@@ -514,29 +844,49 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     """Run the grid and print the report."""
     args = parse_args(argv)
-    if args.paths < 2:
+    crypto = args.dataset == CRYPTO_PERP.name
+
+    num_paths = args.paths
+    if num_paths is None:
+        num_paths = CRYPTO_DEFAULT_PATHS if crypto else DEFAULT_PATHS
+    num_steps = args.steps
+    if num_steps is None:
+        num_steps = CRYPTO_PERP.default_steps if crypto else DEFAULT_STEPS
+
+    if num_paths < 2:
         raise SystemExit("--paths must be at least 2 to report a standard error")
+    if num_steps < 1:
+        raise SystemExit("--steps must be at least 1")
     if args.workers < 1:
         raise SystemExit("--workers must be at least 1")
 
-    scenarios = build_scenarios(num_steps=args.steps)
+    scenarios = (build_crypto_scenarios(num_steps=num_steps) if crypto
+                 else build_scenarios(num_steps=num_steps))
     print(
-        f"Running {len(scenarios)} configurations x {args.paths} paths "
-        f"on {args.workers} worker(s)."
+        f"Running {len(scenarios)} {args.dataset} configurations x "
+        f"{num_paths} paths of {num_steps} steps on {args.workers} worker(s)."
     )
 
     started = time.perf_counter()
     summary, differences = run_benchmarks(
-        scenarios, num_paths=args.paths, base_seed=args.seed, workers=args.workers
+        scenarios, num_paths=num_paths, base_seed=args.seed, workers=args.workers
     )
     wall_clock = time.perf_counter() - started
 
-    print_report(
-        summary, differences,
-        num_paths=args.paths, base_seed=args.seed,
-        num_steps=args.steps, wall_clock=wall_clock,
-        quote_size=scenarios[0].quote_size,
-    )
+    if crypto:
+        print_crypto_report(
+            summary, differences,
+            num_paths=num_paths, base_seed=args.seed,
+            num_steps=num_steps, wall_clock=wall_clock,
+            dataset=scenarios[0].dataset,
+        )
+    else:
+        print_report(
+            summary, differences,
+            num_paths=num_paths, base_seed=args.seed,
+            num_steps=num_steps, wall_clock=wall_clock,
+            quote_size=scenarios[0].quote_size,
+        )
 
 
 if __name__ == "__main__":

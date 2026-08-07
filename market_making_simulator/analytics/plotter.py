@@ -174,16 +174,23 @@ Performance:
 
         The bars reconcile exactly:
             gross_pnl = spread_capture + inventory_pnl
-            net_pnl   = gross_pnl + rebates - liquidation_cost
+            net_pnl   = gross_pnl + rebates + funding - liquidation_cost
 
         Adverse selection is a signed markout on our fills, a split of the
         inventory term rather than an extra bucket, so it is drawn as a separate
         diagnostic bar off the waterfall and is not added into the total.
 
+        The funding bar is drawn only when there is funding, because an
+        instrument without a perpetual leg has no such term and a permanent
+        zero bar reads as a measurement rather than as an absence. The residual
+        below always includes it, so a non-zero funding term can never be
+        dropped from the chart and pass the reconciliation.
+
         Args:
             summary: Dict from `MarketSimulator.get_summary()`. Needs the keys
                 spread_capture, inventory_pnl, gross_pnl, rebates,
-                liquidation_cost, net_pnl and adverse_selection.
+                liquidation_cost, net_pnl and adverse_selection, and reads
+                funding when present.
             title: Figure title
 
         Returns:
@@ -193,6 +200,9 @@ Performance:
         inventory_pnl = summary['inventory_pnl']
         gross_pnl = summary['gross_pnl']
         rebates = summary['rebates']
+        # Tolerated as absent so a summary from an older run still plots; every
+        # summary this package produces carries the key.
+        funding = summary.get('funding', 0.0)
         liquidation_cost = summary['liquidation_cost']
         net_pnl = summary['net_pnl']
         adverse_selection = summary['adverse_selection']
@@ -204,6 +214,10 @@ Performance:
             ('Inventory\nPnL', inventory_pnl, False),
             ('Gross PnL', gross_pnl, True),
             ('Rebates', rebates, False),
+        ]
+        if funding != 0.0:
+            entries.append(('Funding', funding, False))
+        entries += [
             ('Liquidation\ncost', -liquidation_cost, False),
             ('Net PnL', net_pnl, True),
         ]
@@ -242,7 +256,8 @@ Performance:
         # Absolute values, so a positive residual on one leg cannot mask a
         # negative one on the other and report a false zero.
         residual = abs((spread_capture + inventory_pnl) - gross_pnl)
-        residual += abs((gross_pnl + rebates - liquidation_cost) - net_pnl)
+        residual += abs(
+            (gross_pnl + rebates + funding - liquidation_cost) - net_pnl)
         ax.text(0.98, 0.97,
                 f'Identity residual: {residual:.2e}',
                 transform=ax.transAxes, fontsize=8,
