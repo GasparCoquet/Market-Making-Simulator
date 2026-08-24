@@ -12,13 +12,13 @@ what happened to this one before v0.2 and is documented at the bottom.
 One engine, two calibrations. The same model quotes a US cash equity and a
 crypto perpetual swap, and the two are held identical in every dimensionless
 quantity so that the difference between them is market structure and nothing
-else: the calendar, the funding leg, the fee denomination and the session
-close. See [Crypto](#crypto-the-same-engine-on-a-second-dataset).
+else, namely the calendar, the funding leg, the fee denomination and the
+session close. See [Crypto](#crypto-the-same-engine-on-a-second-dataset).
 
 ## What this is, and what it is not
 
 **It is** a continuous-time market-making model in the Avellaneda-Stoikov
-family: a mid-price diffusion, a fill intensity that decays with quote
+family, with a mid-price diffusion, a fill intensity that decays with quote
 distance, an inventory-linked reservation price, and a Monte Carlo harness that
 compares configurations with paired standard errors.
 
@@ -31,7 +31,7 @@ real feed. If you need queue position, this is the wrong model, and the
 feed on either asset class. What a dataset fixes is the price level, the width
 of the market, the arrival intensity, the volatility and the calendar it is
 annualised against, the fee denomination, and whether the instrument ever
-closes. Absolute PnL levels are meaningless in both; only the paired
+closes. Absolute PnL levels are meaningless in both. Only the paired
 comparisons carry information.
 
 ## The model
@@ -47,16 +47,16 @@ m_{t+1} = m_t * exp( -0.5 * sigma^2 * dt + sigma * sqrt(dt) * Z ),   Z ~ N(0,1)
 
 `sigma` is a **per-step** log-return volatility. Use
 `units.per_step_volatility(annual_vol, seconds_per_step, seconds_per_year)` to
-get it from an annualised figure; 25% annualised on one-second steps is
+get it from an annualised figure. 25% annualised on one-second steps is
 `1.030e-04` per step. Quoting volatility without a time unit is how the
 previous version ended up labelling `0.02` as "2% volatility" when it meant 2%
 *per step*, a $2 move on a $100 asset against a five-cent quote.
 
 There is a second unit hiding behind the first, and it is the one that matters
-for crypto: "annualised" means nothing until you say how many seconds are in
-the year. `seconds_per_year` defaults to the equity session calendar
-(`252 * 6.5 * 3600`); pass `SECONDS_PER_CALENDAR_YEAR` for anything that trades
-around the clock.
+for crypto, because "annualised" means nothing until you say how many seconds
+are in the year. `seconds_per_year` defaults to the equity session calendar
+(`252 * 6.5 * 3600`). Pass `SECONDS_PER_CALENDAR_YEAR` for anything that
+trades around the clock.
 
 ### Fills
 
@@ -69,7 +69,7 @@ P(fill within dt) = 1 - exp(-lambda(delta) * dt)
 
 Order sizes are exponential with mean `mean_order_size`, and the fill is capped
 at our own quoted size, so large arrivals fill us partially. Defaults are
-`A = 0.8`, `k = 20.0`: a quote at the mid fills with probability 55.1% per unit
+`A = 0.8`, `k = 20.0`. A quote at the mid fills with probability 55.1% per unit
 of time, one five cents out with 25.5%, one twenty cents out with 1.45%.
 
 This is the piece that has to exist. Without it, PnL is linear in the quoted
@@ -94,14 +94,14 @@ ask = r + quote_spread
 ```
 
 The quoted width is exactly `2 * quote_spread` at every inventory level, so the
-quotes can never cross. When we are long, **both** quotes move down: the ask
+quotes can never cross. When we are long, **both** quotes move down. The ask
 gets easier to lift and the bid harder to hit, so the position bleeds off.
 
 The intuitive-sounding alternative, "long inventory, widen the ask", does the
 opposite of what is wanted, because a wider ask is *less* likely to be lifted.
 
 Note the failure mode this rule has, which the benchmark measures rather than
-hides: the ask reaches the mid at `|q| = quote_spread / gamma`. Past that
+hides. The ask reaches the mid at `|q| = quote_spread / gamma`. Past that
 inventory we are quoting through the mid and paying for our own fills. At
 `gamma = 0.05` with `quote_spread = 0.05` that threshold is one unit against a
 ten-unit clip, which is why the aggressive-skew row loses $1,610.
@@ -131,7 +131,7 @@ net_pnl = gross_pnl + rebates + funding - liquidation_cost
 where `liquidation_cost` charges the market's half-spread on residual
 inventory, so a strategy cannot look profitable by carrying an open position
 marked at mid. `rebates` and `funding` are held outside `cash` precisely so
-that the identity above stays exact; folding either into the trading cash would
+that the identity above stays exact. Folding either into the trading cash would
 break the reconciliation between the tracker's decomposition and the maker's
 own mark to market.
 
@@ -144,7 +144,7 @@ right side, and zero in expectation under uninformed flow.
 **The close-out cost is not one either.** Flattening at a session close is an
 ordinary trade at a bad price, so it is already inside `spread_capture` as
 negative edge, and `quoted_edge - close_out_cost == spread_capture` exactly.
-It is reported beside adverse selection for the same reason: putting it in the
+It is reported beside adverse selection for the same reason. Putting it in the
 waterfall would subtract it twice, which is the mistake v0.1 made with the
 markout.
 
@@ -154,7 +154,7 @@ Three things are properties of the instrument and the venue rather than of the
 quoting rule, and each is off by default:
 
 - **Funding.** Attaching a `FundingModel` gives the instrument a perpetual-swap
-  funding leg: at fixed timestamps, `-inventory * mark_price * rate` settles as
+  funding leg. At fixed timestamps, `-inventory * mark_price * rate` settles as
   cash. Positive rate means longs pay shorts.
 - **The session close.** Setting `session_steps` gives it a close, at which the
   book is flattened by crossing the market's reference half-spread.
@@ -257,7 +257,7 @@ The `Funding` line is `$0.00` and the two structural counters are zero because
 a cash equity has no funding leg and 2,000 steps is 33 minutes, well inside one
 6.5-hour session. Both fire on the runs in the crypto section below. The maker
 rebate is `+$14.32` because the equity calibration is on a maker-taker venue
-paying $0.0020 a share; the benchmark grid below runs gross of fees and is
+paying $0.0020 a share. The benchmark grid below runs gross of fees and is
 unaffected.
 
 ## Benchmark results
@@ -288,7 +288,7 @@ risk overlay (kill @ $1.40)         5    83.56   1.89     7.53    1.6%     887  
 **Mean PnL is independent of volatility by construction here, and the Monte
 Carlo confirms the implementation respects that.** It is tempting to present
 the flat volatility rows as a result. They are not one. In this model `sigma`
-enters *only* through the price path: fill probability is a function of quote
+enters *only* through the price path. Fill probability is a function of quote
 distance alone, and quote distance depends on `quote_spread` and `gamma * q`,
 never on `sigma`. So under common random numbers the entire fill sequence is
 identical across volatility settings, and only inventory PnL can differ. Over
@@ -296,8 +296,8 @@ identical across volatility settings, and only inventory PnL can differ. Over
 `1.7e-13` and the fill counts differ on **zero** paths.
 
 What the Monte Carlo does establish is that the implementation has no
-accidental volatility-to-flow channel, and that dispersion scales as it should:
-per-path standard deviation of inventory PnL is `1.01 / 2.52 / 6.05` at 10% /
+accidental volatility-to-flow channel, and that dispersion scales as it should.
+Per-path standard deviation of inventory PnL is `1.01 / 2.52 / 6.05` at 10% /
 25% / 60% annualised, linear in `sigma` to two figures. The paired differences
 in mean are `+0.07 (SE 0.15, t = 0.4)` and `-0.03 (SE 0.07, t = -0.4)`, both
 indistinguishable from zero, as they must be.
@@ -312,9 +312,9 @@ channels, which is a limitation rather than a discovery.
 is lost volume.** Raising `informed_fraction` from 0 to 0.3 costs `-33.61` of
 mean net PnL, but only `-9.93` of that is inventory PnL, which is what the
 markout captures at `-10.03 (SE 0.15)`. The other `-23.71`, about 71%, is lost
-*spread capture*: informed arrivals are one-sided by construction, so raising
+*spread capture*. Informed arrivals are one-sided by construction, so raising
 the fraction removes one quote's chance to fill and drops mean fills from 1269
-to 1082. At 0.6 the split is the same shape: `-66.95` net, `-19.91` inventory,
+to 1082. At 0.6 the split is the same shape, `-66.95` net, `-19.91` inventory,
 `-47.04` spread capture, 70%. The markout itself is well behaved, `0.11
 (SE 0.15)` at zero informed flow and almost exactly linear thereafter, but
 reading the net PnL column as "the cost of adverse selection" would be wrong by
@@ -326,7 +326,7 @@ most on the mean and carries 49.2 units of mean absolute final inventory against
 4.1 at baseline, with a max drawdown of 9.93 against 1.72. The table prints the
 inventory and drawdown columns next to the mean precisely so the mean cannot be
 read on its own. The two negative rows are the reservation-price rule behaving
-as specified rather than a pricing bug: the ask reaches the mid at
+as specified rather than a pricing bug. The ask reaches the mid at
 `|q| = quote_spread / gamma`, printed as the `cross |q|` column, so at
 `gamma = 0.05` that threshold is one unit against a ten-unit clip and the
 strategy quotes through the mid almost permanently.
@@ -334,7 +334,7 @@ strategy quotes through the mid almost permanently.
 ## Crypto: the same engine on a second dataset
 
 The same model quotes a crypto perpetual swap. Nothing in the engine is
-special-cased for it: a perpetual is a calibration in which the calendar has no
+special-cased for it. A perpetual is a calibration in which the calendar has no
 gaps, a funding leg settles on a clock, fees are quoted on notional, and there
 is no close.
 
@@ -366,13 +366,13 @@ a different width into a different book, every difference between the two would
 be a mixture of market structure and an invented spread, and neither could be
 read off the other.
 
-The design is tight enough to be checked: under a shared seed the two
+The design is tight enough to be checked. Under a shared seed the two
 calibrations fill on **exactly the same steps**, because identical geometry
 means identical fill probabilities. That is asserted in the test suite. The
 flow is not merely comparable across the two datasets, it is the same flow.
 
 The cost of the design is that `crypto-perp` is not a real perp. A BTC
-perpetual is quoted far tighter than 20bp; the touch is often under a basis
+perpetual is quoted far tighter than 20bp. The touch is often under a basis
 point. Matching that would need a different arrival intensity, and the
 comparison would then be measuring a guess at that intensity rather than the
 four axes below. Absolute PnL levels are meaningless here exactly as they are
@@ -400,7 +400,7 @@ calendar explicitly and why both datasets carry theirs.
 
 The second consequence is horizon. A perpetual quotes 604,800 seconds in a
 calendar week against a cash equity's 117,000, a factor of **5.17**. The
-mechanics that define it are also slow: funding settles hourly and a session
+mechanics that define it are also slow. Funding settles hourly and a session
 would close every 6.5 hours, so nothing structural happens inside the 33-minute
 window the equity examples run in. `crypto-perp` therefore defaults to a full
 24-hour day, which is the shortest horizon on which every mechanic fires more
@@ -416,7 +416,7 @@ payment = -inventory * mark_price * rate_per_interval
 ```
 
 Positive rate, longs pay. The default is `1.25e-05` settled hourly, which is
-the ubiquitous 0.01% per eight hours in the cadence Hyperliquid and dYdX use;
+the ubiquitous 0.01% per eight hours in the cadence Hyperliquid and dYdX use.
 Binance, Bybit and OKX settle the same rate eight-hourly.
 
 **Measured over 100 paths of 24 hours, funding is a rounding error, and that is
@@ -429,7 +429,7 @@ carry term, not a transaction term.** It scales with `|inventory| x time`,
 while a fee scales with volume. This book carries a mean absolute inventory of
 0.41 clips, which is $410 of notional, and 3bp a day on $410 is 12 cents
 against a gross PnL of $3,732. It is also as often short as long, so even that
-nets out: the sign of the measured mean is positive, because the quoter tends
+nets out. The sign of the measured mean is positive, because the quoter tends
 to be long after the price has fallen and short after it has risen, but at
 `t = 0.3` that is a curiosity rather than a result.
 
@@ -437,7 +437,7 @@ Funding becomes first-order for a book that is *persistently* one-signed, which
 a two-sided quoter with an inventory lean is not. If you want it to bite, model
 a desk that can only go long.
 
-The eight-hourly row is a control rather than a scenario: the same rate per
+The eight-hourly row is a control rather than a scenario. The same rate per
 unit of time in coarser settlements should move the mean by nothing, and it
 moves it by `-0.00 (SE 0.01)`. If the rate and the interval did not compose,
 the two venue conventions would not be interchangeable in this model and every
@@ -484,7 +484,7 @@ equity table. **A 2bp maker fee is bigger than everything this strategy earns**,
 which is the short version of why crypto market making is a fee-tier business
 before it is a modelling one.
 
-The caveat is the one the whole repository carries: the ratio of fee to gross
+The caveat is the one the whole repository carries. The ratio of fee to gross
 edge is set by the quoted width and the arrival intensity, and neither is
 calibrated to any venue. What the model shows is not that 2bp is fatal at some
 particular real spread. It is that a notional fee scales with **volume** while
@@ -495,8 +495,8 @@ across the equity and crypto conventions without first stating the notional.
 
 A cash equity desk does not carry an unhedged position through the overnight
 gap, so at the close it crosses the market and goes flat. A perpetual has no
-close and no gap; it carries the position and pays funding on it. In the model
-that is `session_steps`: at the end of every such block the book is flattened
+close and no gap. It carries the position and pays funding on it. In the model
+that is `session_steps`. At the end of every such block the book is flattened
 at the market's reference half-spread. It is implemented as an ordinary trade
 at a bad price rather than as an accounting rule, so the PnL identity absorbs
 it with no special case, and the cost shows up as negative spread capture.
@@ -523,7 +523,7 @@ paired vs no close, 1h:    d net +163.51 (SE 28.88, t = +5.7)
 ```
 
 At a realistic session cadence the reset is statistically real and
-economically negligible: 0.9% off the inventory carried, and a net PnL
+economically negligible, with 0.9% off the inventory carried, and a net PnL
 difference that does not clear two standard errors. It takes 24 resets a day to
 move net PnL significantly, and even then the inventory falls only 6.7%.
 
@@ -574,7 +574,7 @@ skew 0.00 + 6.5h flatten   4875.50  23.93    203.7         100.0%
 ```
 
 Two columns need reading with care. `max DD` on the fee-paying rows is
-`1,986.74`, which is not price risk: a book whose fees exceed its edge bleeds
+`1,986.74`, which is not price risk. A book whose fees exceed its edge bleeds
 monotonically, so its drawdown is just its loss. And `informed 0%` earns *less*
 than the baseline in net terms despite better markouts, because removing
 informed flow raises the fill count from 46,637 to 54,559 and every extra fill
@@ -585,7 +585,7 @@ One consequence worth flagging: `python example.py --dataset crypto-perp` halts
 after 8,678 of its 86,400 steps, because the $200 kill-switch inherited from
 the equity example is reached by the fee bleed. That is the stop working
 correctly, not a mis-set limit. *Any* fixed drawdown limit stops a monotonically
-bleeding book eventually; only the timing is in question. Pass
+bleeding book eventually. Only the timing is in question. Pass
 `--drawdown-limit 0` to see the whole day.
 
 ### What did not change
@@ -626,7 +626,7 @@ reintroduced:
   with no tie. The smallest margin is 40 fills, and strictness was separately
   confirmed at 400, 600, 800, 1000 and 1500 steps, so the shipped 600 is not a
   tuned-to-pass choice.
-- the mid is a martingale: over 2000 paths of 200 steps the mean terminal price
+- the mid is a martingale. Over 2000 paths of 200 steps the mean terminal price
   is asserted within 3 standard errors of the initial price, and measures 0.5.
   A companion test re-runs the identical estimator with the Itô correction
   cancelled and asserts it *rejects*, so the martingale test cannot silently
@@ -634,8 +634,8 @@ reintroduced:
   errors high against the same 3 SE threshold.
 - adverse selection is asserted within 3 standard errors of zero under
   uninformed flow, and measures -0.08. At `informed_fraction = 0.3` the same
-  60-seed fixture gives `-10.03 (SE 0.51)`, so 19.8 standard errors below zero;
-  significance is asserted at `informed_fraction = 0.6`.
+  60-seed fixture gives `-10.03 (SE 0.51)`, so 19.8 standard errors below zero.
+  Significance is asserted at `informed_fraction = 0.6`.
 - the kill-switch does **not** fire on a $1,000 cash outflow at zero loss, does
   fire on a real drawdown, and stays halted afterwards
 - `get_quotes` is idempotent, so quoting twice at the same state cannot
@@ -655,7 +655,7 @@ asserting where getting it wrong would still look right:
   field without deciding which side of the design it falls on is a test failure
   rather than a quiet weakening of the comparison
 - both datasets fill on exactly the same steps under a shared seed
-- funding's sign is asserted both ways: a long book pays a positive rate and a
+- funding's sign is asserted both ways. A long book pays a positive rate and a
   short book receives it. Getting this backwards turns a cost into a subsidy
   and the waterfall still reconciles, because both sides move together
 - the first funding payment lands at the end of the first *interval*, not at
@@ -731,7 +731,7 @@ Stated plainly, because the model is only useful if you know where it stops.
   calibrated claims about any venue.
 - **A perpetual's price process here is the same GBM as the equity's**, with no
   index, no basis, and no mechanism connecting funding to price. Funding is
-  charged on the position; nothing charges the position for the funding.
+  charged on the position. Nothing charges the position for the funding.
 
 ## What changed in v0.2
 
@@ -741,7 +741,7 @@ because a benchmark table is only worth reading if you know what was wrong with
 the previous one.
 
 1. **Fills were independent of the quoted price.** A coin flip decided whether a
-   trade happened; the quote never entered the decision. PnL was therefore
+   trade happened. The quote never entered the decision. PnL was therefore
    linear in `quote_spread` and every scenario reported exactly 51 trades
    whether the maker quoted one cent or fifty dollars wide. Every conclusion in
    the old benchmark table was an artefact of this. Fixed by the intensity model.
@@ -757,11 +757,11 @@ the previous one.
    code emits unconditionally, so it cannot have come from any run. Everything
    in this README is now pasted from a real run at a stated seed.
 
-Also fixed: the missing Itô correction, which gave the asset a built-in `+13.3%`
-drift at the high-volatility setting; single-path benchmark rankings with no
-error bars, on a quantity whose per-path standard deviation was eight times the
-mean; and a kill-switch that fired on cash flow rather than on losses, so
-buying 10 units of a $100 asset tripped it with zero actual loss.
+Also fixed: the missing Itô correction (which gave the asset a built-in
+`+13.3%` drift at the high-volatility setting), single-path benchmark rankings
+with no error bars (on a quantity whose per-path standard deviation was eight
+times the mean), and a kill-switch that fired on cash flow rather than on
+losses, so buying 10 units of a $100 asset tripped it with zero actual loss.
 
 ## References
 
@@ -783,7 +783,7 @@ than from a paper. The 0.01% per eight hours funding rate and its hourly
 variant, the 2bp non-VIP maker fee, and the rebate at the top volume tiers are
 the published schedules of the major perpetual venues. The $0.0020 per share
 maker rebate is the ordinary US maker-taker equity tier. None of them is
-calibrated to observed data here; they are the modal published numbers, chosen
+calibrated to observed data here. They are the modal published numbers, chosen
 so that the fee axis spans the range a real desk actually faces.
 
 ## License
